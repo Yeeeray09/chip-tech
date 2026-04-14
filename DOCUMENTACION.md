@@ -4,75 +4,85 @@
 
 ## La idea
 
-Vi una cuenta de Instagram (@tecnology) que publicaba 4-6 posts diarios de noticias tech con un timing demasiado perfecto para ser manual. Intuí que estaba automatizado. Me propuse hacer mi propia versión: @chipitech (CHIP), una cuenta que publica carruseles de noticias tech e IA en español de forma completamente automática, sin que yo tenga que tocar nada.
+Vi una cuenta de Instagram (@tecnology) que subía 5 o 6 posts al día, siempre a la misma hora, con el mismo formato. Pensé: esto no lo hace una persona. Me puse a investigar y me quedó claro que era automático. Así que decidí hacer lo mismo pero en español y desde cero: @chipitech, una cuenta de noticias tech e IA que se publica sola.
 
 ---
 
 ## Qué es CHIP
 
-CHIP es un pipeline de Python que, tres veces al día, busca noticias relevantes por RSS, se las pasa a Claude para que genere el contenido de un carrusel, renderiza las imágenes con Pillow y las publica en Instagram. Sin intervención humana. El resultado es una cuenta activa con contenido real, curado por IA y publicado de forma autónoma.
+Es un script de Python que hace todo el trabajo: busca noticias, le pide a una IA que genere el contenido, dibuja las imágenes y las sube a Instagram. Tres veces al día, sin que yo haga nada. El nombre CHIP viene de la mascota del proyecto, un robotito que aparece en cada carrusel.
 
 ---
 
 ## El papel de la IA
 
-La IA fue central en dos niveles distintos.
+La IA aparece en dos sitios.
 
-**En producción:** Claude (`claude-sonnet-4-5`) es quien genera el contenido de cada carrusel — titulares, textos de slides, caption con hashtags y el "mood" de la noticia. No es un relleno; es la pieza que convierte una noticia en inglés en contenido visual en español con criterio editorial.
+**En la app:** Claude es el que escribe el contenido de cada carrusel. Le paso el titular y el resumen de la noticia, y él me devuelve los textos de los slides, el caption y decide si la noticia es emocionante, polémica o confusa (eso cambia la expresión de la mascota).
 
-**En desarrollo:** todo el proyecto se construyó en colaboración con Claude Code y Claude chat. La arquitectura, la resolución de bugs, el diseño visual, la configuración de APIs, la estructura de módulos — todo fue una conversación continua. Eso no significa que la IA lo hiciera sola: cada credencial, cada cuenta Business de Meta, cada secreto de GitHub Actions requirió que yo tomara decisiones y configurara cosas que ninguna IA puede hacer por ti. Saber usar IA como herramienta de desarrollo es una habilidad en sí misma, y este proyecto me obligó a desarrollarla de verdad.
+**En el desarrollo:** todo el proyecto lo hice con ayuda de Claude Code y Claude chat. No sabía cómo estructurar el proyecto, no había tocado la API de Meta en mi vida, y el diseño visual lo fuimos ajustando juntos. Pero hay cosas que la IA no puede hacer por ti: crear la cuenta Business de Instagram, configurar la app en Meta for Developers, meter los secrets en GitHub. Esas partes las tuve que entender y hacer yo.
+
+No me da vergüenza decir que usé IA para desarrollar. Lo que aprendí es que tampoco te lo hace todo solo — tienes que entender qué está pasando.
 
 ---
 
 ## Stack y decisiones técnicas
 
-El proyecto usa **Python** como lenguaje principal — ecosistema maduro para este tipo de pipelines, sin necesidad de justificación. Para el renderizado de imágenes elegí **Pillow** en lugar de soluciones basadas en navegador (Playwright/Puppeteer) o servicios externos: Pillow es control total, sin dependencias pesadas, y para slides 1080x1080 es más que suficiente.
+**Python** porque es lo que sé y tiene librerías para todo esto.
 
-El contenido lo genera **Claude via la Anthropic API** (`claude-sonnet-4-5`). La alternativa era GPT-4, pero trabajo con Claude habitualmente y la calidad en español es sólida. Para la publicación uso la **Meta Graph API v19.0** directamente con `requests` — es la única vía oficial para publicar carruseles en Instagram desde código.
+**Pillow** para dibujar las imágenes. Barajé hacer los slides con HTML y capturar pantalla (con Playwright), pero era matar moscas a cañonazos. Con Pillow pinto los fondos, escribo el texto y coloco la mascota directamente, sin navegador.
 
-El problema que no anticipé: Meta Graph API exige URLs públicas para las imágenes, no rutas locales. Por eso añadí **Cloudinary** — subo las imágenes ahí primero y paso las URLs a Meta. Es un paso extra, pero el plan gratuito de Cloudinary cubre perfectamente el volumen del proyecto.
+**Anthropic API** (Claude) para generar el contenido. Podría haber usado ChatGPT, pero llevo tiempo usando Claude y me fío más de cómo escribe en español.
 
-Para evitar publicar la misma noticia dos veces uso **SQLite** con una tabla `seen_articles`. No necesitaba nada más complejo. El `uid` de cada artículo es un hash SHA-256 de su URL, así que es determinista y barato de calcular.
+**Meta Graph API** para publicar en Instagram. Es la única forma oficial. Tiene bastante lío con permisos y tokens, pero es lo que hay.
+
+**Cloudinary** porque Meta pide URLs públicas para las imágenes, no puedo pasarle rutas de mi máquina. Subo las imágenes a Cloudinary primero y le paso el enlace a Meta. El plan gratuito me sobra.
+
+**SQLite** para no publicar la misma noticia dos veces. Guardo un hash de cada URL que ya he procesado. Si ya está en la base de datos, la salto.
+
+**GitHub Actions** para ejecutarlo tres veces al día sin pagar hosting. Un YAML con tres líneas de cron y listo.
 
 ---
 
 ## Cómo funciona (arquitectura)
 
-El pipeline sigue este orden cada vez que se ejecuta:
+Cada vez que se ejecuta, el programa hace esto en orden:
 
-1. **`main.py`** — orquesta todo. Parsea argumentos (`--test` para generar sin publicar), llama a cada módulo en secuencia y gestiona errores por artículo para que un fallo no corte el resto de la ejecución.
+1. **`main.py`** arranca todo. También tiene un modo `--test` que genera las imágenes pero no publica, para probar sin gastar llamadas a la API.
 
-2. **`fetcher.py`** — consulta 20 fuentes RSS (The Verge, TechCrunch, Wired, Xataka, blogs de OpenAI, Anthropic, Google AI, etc.), filtra por keywords de IA y tech, y descarta artículos ya vistos consultando SQLite. Devuelve los artículos nuevos y relevantes.
+2. **`fetcher.py`** lee 20 feeds RSS (The Verge, TechCrunch, Xataka, blogs de OpenAI, Anthropic, etc.), filtra los artículos que hablen de IA o tech y descarta los que ya procesé mirando SQLite.
 
-3. **`generator.py`** — toma cada artículo y lo envía a Claude con un prompt estructurado. Claude devuelve JSON con el contenido de los slides (2-4 según la complejidad de la noticia), el caption y el "mood" (`excited`, `angry`, `confused`, `happy`). El módulo valida el JSON y añade un slide CTA fijo al final.
+3. **`generator.py`** manda cada artículo a Claude con un prompt que le dice exactamente qué JSON tiene que devolver: entre 2 y 4 slides según lo compleja que sea la noticia, el caption con hashtags y el "mood" de la noticia.
 
-4. **`renderer.py`** — convierte el contenido en imágenes PNG 1080x1080 con Pillow. Slide 1 (hook) y el CTA son oscuros con fondo degradado verde oscuro. Los slides intermedios son claros con gradiente en la barra superior. Las keywords marcadas con `**doble asterisco**` se renderizan en verde o azul según la paleta.
+4. **`renderer.py`** convierte ese JSON en imágenes PNG de 1080x1080. El primer slide (hook) y el último (CTA) son oscuros. Los del medio son claros. Las palabras clave van en verde o azul.
 
-5. **`publisher.py`** — sube las imágenes a Cloudinary, obtiene las URLs públicas y llama a la Meta Graph API para crear y publicar el carrusel en Instagram.
+5. **`publisher.py`** sube las imágenes a Cloudinary, coge las URLs y llama a la API de Meta para publicar el carrusel.
 
-SQLite también lleva un contador de publicaciones para rotar el color del hook (blanco / verde / azul) entre carruseles consecutivos.
+SQLite también lleva la cuenta de cuántos carruseles se han publicado, para ir rotando el color del hook entre publicaciones.
 
 ---
 
 ## El problema del hosting
 
-Necesitaba ejecutar el pipeline tres veces al día de forma fiable y gratuita.
+Necesitaba algo que ejecutara el script tres veces al día y que fuera gratis.
 
-Probé **Railway** primero — requería tarjeta de crédito y pasarse al plan de pago para algo tan simple. Lo descarté. Intenté con **Oracle Cloud Free Tier** — el servidor funciona, pero la configuración fue innecesariamente compleja para un script que se ejecuta unos segundos tres veces al día.
+Primero probé **Railway**. Pedía tarjeta de crédito y plan de pago. Descartado.
 
-La solución fue **GitHub Actions**. Un YAML con tres crons (`0 8`, `0 13`, `0 18` UTC), `ubuntu-latest`, Python 3.11, `pip install -r requirements.txt` y `python main.py`. Los secrets (claves de API) van en el repositorio como GitHub Secrets. Gratuito, simple, auditable, con logs por ejecución. En retrospectiva era la respuesta obvia desde el principio.
+Luego **Oracle Cloud Free Tier**. Funciona, pero montar un servidor Linux para ejecutar un script de 10 segundos tres veces al día es demasiado. Además tuve varios errores al configurarlo que no sabía resolver.
+
+Al final: **GitHub Actions**. Tiene cron nativo, corre en Ubuntu, instala Python, ejecuta el script y ya. Los secrets de las APIs van en la configuración del repositorio. Gratis, sin complicaciones y puedo ver el log de cada ejecución.
 
 ---
 
 ## Diseño visual
 
-El sistema de slides sigue una estructura fija de tres tipos:
+Todos los carruseles tienen la misma estructura:
 
-- **Hook (slide 1):** fondo oscuro (`#0a1a0f` → `#0d2818`), tipografía grande en blanco, grid de puntos tech superpuesto, mascota CHIP en la esquina con la expresión del mood de la noticia.
-- **Slides de contenido (intermedios):** fondo claro (`#F7FAF8`), barra de gradiente verde en la parte superior, título en oscuro, texto en gris, keywords técnicas resaltadas en verde (`#00D96F`) o azul (`#0099FF`).
-- **CTA (último slide):** mismo estilo oscuro que el hook, mensaje de seguimiento rotando entre tres variantes, logo de CHIP.
+- **Slide 1 (hook):** fondo oscuro verde casi negro, texto grande en blanco, grid de puntos, mascota CHIP con la expresión que eligió Claude.
+- **Slides del medio:** fondo claro, barra de gradiente arriba, título y texto. Las palabras técnicas importantes van resaltadas en verde o azul.
+- **Último slide (CTA):** fondo oscuro igual que el primero, mensaje pidiendo que sigan la cuenta, logo de CHIP.
 
-La mascota CHIP tiene cinco expresiones — `normal`, `happy`, `excited`, `angry`, `confused` — que Claude elige según el tono de la noticia. Es un detalle pequeño pero da personalidad a la cuenta.
+La mascota tiene cinco expresiones: normal, contenta, emocionada, enfadada y confundida. Claude decide cuál usar según el tono de la noticia.
 
 ---
 
@@ -80,40 +90,40 @@ La mascota CHIP tiene cinco expresiones — `normal`, `happy`, `excited`, `angry
 
 ```
 chip-tech/
-├── main.py                  # Orquestador principal
-├── fetcher.py               # Lector de RSS + deduplicación con SQLite
-├── generator.py             # Generación de contenido con Claude
-├── renderer.py              # Renderizado de imágenes con Pillow
-├── publisher.py             # Subida a Cloudinary + publicación en Instagram
-├── requirements.txt         # Dependencias Python
-├── .env.example             # Variables de entorno necesarias (sin valores)
-├── chip.db                  # Base de datos SQLite (artículos vistos + contador)
-├── chip.log                 # Log de ejecuciones
+├── main.py                  # Arranca todo y coordina los módulos
+├── fetcher.py               # Lee RSS y filtra noticias nuevas
+├── generator.py             # Llama a Claude y genera el contenido
+├── renderer.py              # Dibuja las imágenes con Pillow
+├── publisher.py             # Sube a Cloudinary y publica en Instagram
+├── requirements.txt         # Dependencias
+├── .env.example             # Variables de entorno que hacen falta
+├── chip.db                  # SQLite: artículos vistos y contador
+├── chip.log                 # Log de cada ejecución
 ├── assets/
 │   ├── fonts/               # Poppins Regular, Bold, SemiBold
-│   ├── chip-normal.png      # Mascota — expresión neutral
-│   ├── chip-happy.png       # Mascota — alegre
-│   ├── chip-excited.png     # Mascota — emocionado
-│   ├── chip-angry.png       # Mascota — enfadado
-│   └── chip.confused-*.png  # Mascota — confundido
-├── output/                  # PNGs generados en modo --test
+│   ├── chip-normal.png      # Mascota neutral
+│   ├── chip-happy.png       # Mascota contenta
+│   ├── chip-excited.png     # Mascota emocionada
+│   ├── chip-angry.png       # Mascota enfadada
+│   └── chip.confused-*.png  # Mascota confundida
+├── output/                  # Aquí se guardan los PNGs en modo --test
 └── .github/
     └── workflows/
-        └── publish.yml      # GitHub Actions: 3 ejecuciones diarias
+        └── publish.yml      # Cron de GitHub Actions (3 veces al día)
 ```
 
 ---
 
 ## Tiempo y contexto
 
-Unas 2-3 semanas de trabajo irregular, en paralelo con DAW y trabajo. No fue un sprint continuo — hubo días de nada y días de muchas horas. La mayor parte del tiempo no fue escribir código sino entender cómo funcionan las APIs de Meta (que tienen su propia lógica), configurar cuentas Business, y depurar problemas de credenciales y permisos.
+Unas 2-3 semanas, pero a ratos. Había días que no tocaba nada y días que le metía muchas horas. Lo hice en paralelo con DAW y con el trabajo. Lo que más tiempo me llevó no fue el código sino entender la API de Meta, que tiene bastante lío con permisos, tipos de token y requisitos de cuenta.
 
 ---
 
 ## Lo que aprendí
 
-- La Meta Graph API para Instagram tiene más requisitos de los que parece: cuenta Business, app revisada, tokens de larga duración, y las imágenes deben ser URLs públicas, no locales. Cloudinary resolvió esto último.
-- GitHub Actions es una plataforma de automatización, no solo de CI/CD. Para scripts programados y simples es imbatible.
-- Diseñar un prompt para que Claude devuelva JSON válido y estructurado de forma consistente requiere iterar. El parsing defensivo (limpiar markdown fences, validar campos, defaults) es necesario.
-- Usar IA para desarrollar no significa delegar. Significa colaborar — la IA propone, tú decides, y hay partes que simplemente no puede hacer por ti.
-- SQLite para deduplicación simple es la herramienta correcta. No todo necesita una base de datos real.
+- La API de Instagram no es tan sencilla como parece. Necesitas cuenta Business, una app aprobada en Meta, tokens que caducan y las imágenes tienen que estar en una URL pública. Tardé bastante en hacer que todo encajara.
+- GitHub Actions no es solo para tests y deploys. Para automatizar scripts pequeños es perfecto.
+- Cuando le pides a una IA que devuelva JSON, tienes que validarlo. A veces mete markdown alrededor, a veces falta un campo. Hay que anticiparlo.
+- Usar IA para programar es útil, pero no significa que entiendas menos. Me obligó a entender cada parte porque si no, no podía ni explicarle el problema.
+- Para guardar "esto ya lo he visto" en una base de datos, SQLite es más que suficiente.
