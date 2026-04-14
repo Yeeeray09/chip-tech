@@ -1,0 +1,14 @@
+# Output images
+output/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Environment
+.env
+
+# Logs & DB
+*.log
+chip.db

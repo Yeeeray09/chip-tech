@@ -1,0 +1,13 @@
+# Core
+anthropic>=0.40.0
+python-dotenv>=1.0.0
+
+# RSS
+feedparser>=6.0.11
+requests>=2.32.0
+
+# Image rendering
+Pillow>=10.4.0
+
+# Cloudinary upload
+cloudinary>=1.41.0
